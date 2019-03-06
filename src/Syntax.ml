@@ -41,8 +41,30 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let bool_to_int b = if b then 1 else 0 
+    let int_to_bool i = i != 0 
 
+    let operator s =
+        match s with
+        | "+"  -> ( + )
+        | "-"  -> ( - )
+        | "*"  -> ( * )
+        | "/"  -> ( / )
+        | "%"  -> ( mod )
+        | "<"  -> fun left right -> bool_to_int (( < ) left right)
+        | ">"  -> fun left right -> bool_to_int (( > ) left right)
+        | "<=" -> fun left right -> bool_to_int (( <= ) left right)
+        | ">=" -> fun left right -> bool_to_int (( >= ) left right)
+        | "==" -> fun left right -> bool_to_int (( == ) left right)
+        | "!=" -> fun left right -> bool_to_int (( != ) left right)
+        | "&&" -> fun left right -> bool_to_int (( && ) (int_to_bool left) (int_to_bool right))
+        | "!!" -> fun left right -> bool_to_int (( || ) (int_to_bool left) (int_to_bool right))
+
+    let rec eval st exp =
+        match exp with
+        | Const value -> value
+        | Var name   -> st name
+        | Binop (op, left, right) -> (operator op) (eval st left) (eval st right);;
   end
                     
 (* Simple statements: syntax and sematics *)
@@ -65,8 +87,16 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
-                                                         
+    let rec eval conf op =
+      let (st, input, output) = conf in
+      match op with
+        | Read var	-> (match input with
+                | x::rest -> (Expr.update var x st), rest, output
+                | [] -> failwith("No more input")
+              )
+        | Write exp      -> st, input, (output @ [Expr.eval st exp])
+        | Seq (first, second)       -> eval (eval conf first) second
+        | Assign (var, exp) -> (Expr.update var (Expr.eval st exp) st), input, output  
   end
 
 (* The top-level definitions *)
