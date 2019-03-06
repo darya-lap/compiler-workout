@@ -24,7 +24,25 @@ type config = int list * Stmt.config
 
    Takes a configuration and a program, and returns a configuration as a result
  *)                         
-let eval _ = failwith "Not yet implemented"
+ let interpreter sm evt =
+	let (stack, f) = sm in
+	let (st, input, output) = f in
+	match evt with
+	| LD var   -> [st var] @ stack, f
+	| ST var   -> (match stack with
+		              | x::rest -> rest, (Language.Expr.update var x st, input, output)
+                )
+	| READ     -> (match input with
+		              | x::rest -> [x] @ stack, (st, rest, output)
+				)
+	| WRITE    -> (match stack with
+		              | x::rest -> rest, (st, input, output @ [x])
+                )
+	| BINOP op -> (match stack with
+	| y::x::rest -> [Language.Expr.operator op x y] @ rest, f
+			)
+	| CONST x  -> [x] @ stack, f
+let eval sm prog = List.fold_left interpreter sm prog
 
 (* Top-level evaluation
 
@@ -41,4 +59,15 @@ let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in 
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
-let compile _ = failwith "Not yet implemented"
+
+  (* Expression needs in their own compiler *)
+  let rec compileE e = match e with
+      | Language.Expr.Const n -> [CONST n]
+      | Language.Expr.Var x -> [LD x]
+      | Language.Expr.Binop (operator, left, right) -> (compileE left) @ (compileE right) @ [BINOP operator];;
+
+  let rec compile program = match program with
+      | Language.Stmt.Assign (x, e) -> (compileE e) @ [ST x]
+      | Language.Stmt.Read x -> [READ; ST x]
+      | Language.Stmt.Write e -> (compileE e) @ [WRITE]
+      | Language.Stmt.Seq (a, b) -> (compile a) @ (compile b);;
