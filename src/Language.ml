@@ -130,8 +130,6 @@ module Stmt =
         | Seq (first, second)       -> eval (eval conf first) second
         | Assign (var, exp) -> (Expr.update var (Expr.eval st exp) st), input, output  
 
-    let parseBinOp op = ostap(- $(op)), (fun x y -> Binop (op, x, y))
-
     (* Statement parser *)
     ostap (
       unitStmt:
