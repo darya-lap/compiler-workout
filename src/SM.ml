@@ -24,7 +24,22 @@ type config = int list * Stmt.config
 
    Takes a configuration and a program, and returns a configuration as a result
 *)                         
-let rec eval conf prog = failwith "Not yet implemented"
+let eval_insn config insn = 
+  let (stack, stmt_config) = config in
+  let (state, input, output) = stmt_config in
+  match insn with
+  | BINOP operator -> (match stack with
+    | y::x::tail -> ([(Language.Expr.eval_op operator) x y]@tail, stmt_config))
+    | CONST value -> ([value]@stack, stmt_config)                 
+  | READ -> (match input with
+    | head::tail -> ([head]@stack, (state, tail, output)))
+  | WRITE -> (match stack with
+    | head::tail -> (tail, (state, input, output@[head])))
+  | LD  variable_name -> ([state variable_name]@stack, stmt_config)
+  | ST  variable_name -> (match stack with
+    | head::tail -> (tail, (Language.Expr.update variable_name head state, input, output)))
+
+let rec eval config insn : config = List.fold_left eval_insn config insn
 
 (* Top-level evaluation
 
@@ -32,7 +47,7 @@ let rec eval conf prog = failwith "Not yet implemented"
 
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
-let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
+let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in o
 
 (* Stack machine compiler
 

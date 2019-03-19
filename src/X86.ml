@@ -80,7 +80,103 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile _ _ = failwith "Not yet implemented"
+let rec compile env code =
+  match code with
+  | [] -> env, []
+  | instr::code' ->
+    let env, asmcode =
+      match instr with
+      | CONST n ->
+        let s, env = env#allocate in
+        env, [Mov (L n, s)]
+      | WRITE ->
+        let s, env = env#pop in
+        env, [Push s; Call "Lwrite"; Pop eax]
+      | LD x ->
+        let s, env = (env#global x)#allocate in
+        env, [Mov (M (env#loc x), eax); Mov (eax, s)]
+      | ST x ->
+        let s, env = (env#global x)#pop in
+        env, [Mov (s, eax); Mov (eax, M (env#loc x))]
+
+      | READ ->
+        let s, env = env#allocate in
+        env, [Call "Lread"; Mov (eax, s)]
+
+      | BINOP op ->
+        let right, left, env = env#pop2 in
+        let result, env = env#allocate in
+        env, match op with
+        | "+" | "-" | "*" ->
+          [Mov (left, eax); Binop (op, right, eax); Mov (eax, left)]
+        | "/" ->
+          [Mov (left, eax); Cltd; IDiv right; Mov (eax, result)]
+        | "%" ->
+          [Mov (left, eax); Cltd; IDiv right; Mov (edx, result)]
+        | "&&" | "!!" ->
+          [
+            Binop ("^", eax, eax);
+            Binop ("^", edx, edx);
+            Binop ("cmp", L 0, left);
+            Set ("nz", "%al");
+            Binop ("cmp", L 0, right);
+            Set ("nz", "%dl");
+            Binop (op, eax, edx);
+            Mov (edx, result)
+          ]
+
+        (* Don't know how to parametrize the expression for comparison: Set (OP, "%al"); *)
+        | ">" ->
+          [
+            Mov (left, eax);
+            Binop ("cmp", right, eax);
+            Mov (eax, left)] @ [Mov (L 0, eax);
+            Set ("g", "%al");
+            Mov (eax, result)
+          ]
+        | ">=" ->
+          [
+            Mov (left, eax);
+            Binop ("cmp", right, eax);
+            Mov (eax, left)] @ [Mov (L 0, eax);
+            Set ("ge", "%al");
+            Mov (eax, result)
+          ]
+        | "<" ->
+          [
+            Mov (left, eax);
+            Binop ("cmp", right, eax);
+            Mov (eax, left)] @ [Mov (L 0, eax);
+            Set ("l", "%al");
+            Mov (eax, result)
+          ]
+        | "<=" ->
+          [
+            Mov (left, eax);
+            Binop ("cmp", right, eax);
+            Mov (eax, left)] @ [Mov (L 0, eax);
+            Set ("le", "%al");
+            Mov (eax, result)
+          ]
+        | "==" ->
+          [
+            Mov (left, eax);
+            Binop ("cmp", right, eax);
+            Mov (eax, left)] @ [Mov (L 0, eax);
+            Set ("e", "%al");
+            Mov (eax, result)
+          ]
+        | "!=" ->
+          [
+            Mov (left, eax);
+            Binop ("cmp", right, eax);
+            Mov (eax, left)] @ [Mov (L 0, eax);
+            Set ("ne", "%al");
+            Mov (eax, result)
+          ]
+        | _ -> failwith("Unknown operatorion: " ^ op)        
+    in let env, asmcode' = compile env code' in
+    env, asmcode @ asmcode'
 
 (* A set of strings *)           
 module S = Set.Make (String)
