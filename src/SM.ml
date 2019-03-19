@@ -29,7 +29,7 @@ let eval_insn config insn =
   let (state, input, output) = stmt_config in
   match insn with
   | BINOP operator -> (match stack with
-    | y::x::tail -> ([(Language.Expr.eval_op operator) x y]@tail, stmt_config))
+    | y::x::tail -> ([(Language.Expr.operator operator) x y]@tail, stmt_config))
     | CONST value -> ([value]@stack, stmt_config)                 
   | READ -> (match input with
     | head::tail -> ([head]@stack, (state, tail, output)))
