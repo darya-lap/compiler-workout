@@ -6,7 +6,36 @@ open GT
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap
 open Combinators
+module MyUtils =
+  struct
 
+  let initList n ~f =
+    let rec initList' i n f =
+      if i >= n then []
+      else (f i) :: (initList' (i+1) n f)
+    in initList' 0 n f
+
+  let bti   = function true -> 1 | _ -> 0
+  let itb b = b <> 0
+  let toFunc op =
+    let (|>) f g   = fun x y -> f (g x y) in
+      match op with
+      | "+"  -> (+)
+      | "-"  -> (-)
+      | "*"  -> ( * )
+      | "/"  -> (/)
+      | "%"  -> (mod)
+      | "<"  -> bti |> (< )
+      | "<=" -> bti |> (<=)
+      | ">"  -> bti |> (> )
+      | ">=" -> bti |> (>=)
+      | "==" -> bti |> (= )
+      | "!=" -> bti |> (<>)
+      | "&&" -> fun x y -> bti (itb x && itb y)
+      | "!!" -> fun x y -> bti (itb x || itb y)
+      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)
+
+  end
 (* Values *)
 module Value =
   struct
@@ -29,8 +58,8 @@ module Value =
     let of_string s = String s
     let of_array  a = Array  a
 
-    let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let update_string s i x = String.init      (String.length s) (fun j -> if j = i then x else s.[j])
+    let update_array  a i x = MyUtils.initList (List.length a)   (fun j -> if j = i then x else List.nth a j)
 
   end
        
@@ -127,7 +156,21 @@ module Expr =
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
        an returns a pair: the return value for the call and the resulting configuration
     *)                                                       
-    let rec eval env ((st, i, o, r) as conf) expr = failwith "Not implemented"
+    let rec eval env ((st, i, o, r) as conf) expr = match expr with
+      | Const n  -> (st, i, o, Some (Value.of_int n))
+      | Array l  -> let (st, i, o, v) = eval_list env conf l in env#definition env "$array" v (st, i, o, None)
+      | String s -> (st, i, o, Some (Value.of_string s))
+      | Var x    -> (st, i, o, Some (State.eval st x))
+      | Binop (op, x, y) -> let ((st, i, o, Some a) as conf') = eval env conf x in
+                              let (st, i, o, Some b) = eval env conf' y in
+                              (st, i, o, Some (Value.of_int @@ MyUtils.toFunc op (Value.to_int a) (Value.to_int b)))
+      | Elem (a, i)      -> let (st, i, o, v) = eval_list env conf [a; i] in env#definition env "$elem" v (st, i, o, None)
+      | Length n         -> let (st, i, o, v) = eval_list env conf [n] in env#definition env "$length" v (st, i, o, None)
+      | Call (fName, argsE) -> let (st', i', o', args) = List.fold_left (fun (st, i, o, args) e ->
+                                                                          let ((st, i, o, Some r) as conf') = eval env (st, i, o, None) e in
+                                                                          (st, i, o, args @ [r])
+                                                                        ) (st, i, o, []) argsE in 
+                               env#definition env fName args (st', i', o', None)
     and eval_list env conf xs =
       let vs, (st, i, o, _) =
         List.fold_left
@@ -146,7 +189,36 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string                                                                                                                  
     *)
     ostap (                                      
-      parse: empty {failwith "Not implemented"}
+      parse:
+	  !(Ostap.Util.expr 
+             (fun x -> x)
+	     (Array.map (fun (a, s) -> a, 
+                           List.map  (fun s -> ostap(- $(s)), (fun x y -> Binop (s, x, y))) s
+                        ) 
+              [|                
+		`Lefta, ["!!"];
+		`Lefta, ["&&"];
+		`Nona , ["=="; "!="; "<="; "<"; ">="; ">"];
+		`Lefta, ["+" ; "-"];
+		`Lefta, ["*" ; "/"; "%"];
+              |] 
+	     )
+	     primary);
+
+      primary:
+        b:base acss:(-"[" !(parse) -"]")* l:("." %"length")?
+        {
+          let elements = List.fold_left (fun a i -> Elem (a, i)) b acss in match l with
+            | Some x -> Length elements
+            | None   -> elements
+        };
+      base:
+        n:DECIMAL {Const n}
+      | s:STRING  {String (String.sub s 1 ((String.length s) - 2))}
+      | c:CHAR    {Const (Char.code c)}
+      | "[" es:!(Util.list0 parse) "]" { Array es }
+      | x:IDENT opt:("(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {opt}
+      | -"(" parse -")"
     )
     
   end
@@ -186,11 +258,72 @@ module Stmt =
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
           
-    let rec eval env ((st, i, o, r) as conf) k stmt = failwith "Not implemented"
+      let metaOp x y = match x with
+      | Skip -> y
+      | _ -> match y with
+        | Skip -> x
+        | _ -> Seq (x, y)
+    let rec eval env ((st, i, o, r) as conf) k stmt = match stmt with
+      | Assign (x, is, e)          -> let (st, i, o, is) = Expr.eval_list env conf is in
+                                      let (st, i, o, Some r) = Expr.eval env (st, i, o, None) e in
+                                      eval env (update st x r is, i, o, None) Skip k
+      | Seq (stmt1, stmt2)         -> eval env conf (metaOp stmt2 k) stmt1
+      | Skip                       -> (match k with
+                                        | Skip -> conf
+                                        | _    -> eval env conf Skip k)
+      | If (e, thenStmt, elseStmt) -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in 
+                                        if MyUtils.itb (Value.to_int r) then eval env conf' k thenStmt 
+                                        else eval env conf' k elseStmt
+      | While (e, wStmt)           -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in
+                                        if MyUtils.itb (Value.to_int r) then eval env conf' (metaOp stmt k) wStmt
+                                        else eval env conf' Skip k
+      | Repeat (ruStmt, e)         -> eval env conf (metaOp (While (Expr.Binop ("==", e, Expr.Const 0), ruStmt)) k) ruStmt
+      | Call (fName, argsE)        -> eval env (Expr.eval env conf (Expr.Call (fName, argsE))) Skip k
+      | Return x                   -> (match x with
+                                        | Some x -> Expr.eval env conf x
+                                        | None   -> conf
+                                      )
          
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented"}
+      simple:
+        x:IDENT is:(-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse) {Assign (x, is, e)};
+      ifStmt:
+        "if" e:!(Expr.parse) "then" thenBody:parse
+	elifBranches: (%"elif" elifE:!(Expr.parse) %"then" elifBody:!(parse))*
+	elseBranch: (%"else" elseBody:!(parse))?
+	"fi" {
+	       let elseBranch' = match elseBranch with
+	         | Some x -> x
+                 | None   -> Skip in
+	       let expandedElseBody = List.fold_right (fun (e', body') else' -> If (e', body', else')) elifBranches elseBranch' in
+	       If (e, thenBody, expandedElseBody)  
+	     };
+      whileStmt:
+        "while" e:!(Expr.parse) "do" body:parse "od" {While (e, body)};
+      forStmt:
+        "for" initStmt:stmt "," whileCond:!(Expr.parse) "," forStmt:stmt
+        "do" body:parse "od" {Seq (initStmt, While (whileCond, Seq (body, forStmt)))};
+      repeatUntilStmt:
+	"repeat" body:parse "until" e:!(Expr.parse) {Repeat (body, e)};
+      control:
+          ifStmt
+        | whileStmt
+        | forStmt
+	| repeatUntilStmt
+	| "skip" {Skip};
+      call:
+          fName:IDENT "(" argsE:(!(Expr.parse))* ")" {Call (fName, argsE)};
+      returnStmt:
+          "return" e:!(Expr.parse)? { Return e };
+      stmt:
+          simple 
+        | control
+        | call
+        | returnStmt;
+      parse:
+          stmt1:stmt ";" rest:parse {Seq (stmt1, rest)}
+        | stmt
     )
       
   end
