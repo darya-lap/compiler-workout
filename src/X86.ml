@@ -98,8 +98,8 @@ let cmpOpToAsm op = match op with
   | ">=" -> "ge"
   | ">"  -> "g"
   | _    -> failwith "unknown operator"	
-  in
-  let rec compile env = function
+
+let rec compile env = function
   | []             -> env, []
   | instr :: code' ->
     let env, asm = 
